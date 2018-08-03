@@ -18,26 +18,27 @@ import           GHC.Generics
 import           JavaScript.Web.XMLHttpRequest
 import           Miso                          hiding (defaultOptions)
 import           Miso.String
-import Prelude hiding (head, concat)
-import Data.List hiding (intercalate, concat)
+import Prelude hiding (head, concat, unwords)
 import Control.Monad
 
 -- | Model
-newtype Model =
+data Model =
   Model { info :: Maybe APIInfo
+        , query :: MisoString
         } deriving (Eq, Show)
 
 -- | Action
 data Action
   = FetchGitHub MisoString
   | SetGitHub APIInfo
+  | SetQuery MisoString
   | NoOp
   deriving (Show, Eq)
 
 -- | Main entry point
 main :: IO ()
 main = startApp
-           App { model = Model Nothing
+           App { model = Model { info = Nothing, query = "" }
                , initialAction = NoOp
                , mountPoint = Nothing
                , ..
@@ -52,12 +53,16 @@ main = startApp
 updateModel :: Action -> Model -> Effect Action Model
 
 updateModel (FetchGitHub s) m = m <# do
-  SetGitHub <$> getGitHubAPIInfo s
+  SetGitHub <$> getGitHubAPIInfo (query m)
+
+updateModel (SetQuery q) m =
+  noEff m { query = q }
 
 updateModel (SetGitHub apiInfo) m =
   noEff m { info = Just apiInfo }
 
-updateModel NoOp m = noEff m { info = Nothing }
+updateModel NoOp m =
+  noEff m
 
 -- | View function, with routing
 viewModel :: Model -> View Action
@@ -65,7 +70,7 @@ viewModel Model {..} = view
   where
     view = div_ [ style_ $ M.fromList [
                   (pack "text-align", pack "center")
-                , (pack "margin", pack "100px")
+                , (pack "margin", pack "20px")
                 ]
                ] [
         h1_ [class_ $ pack "title" ] [ text $ pack "Haskell IRC Log Search" ]
@@ -83,7 +88,7 @@ viewModel Model {..} = view
                table_ [ class_ $ pack "table is-striped" ] [
                  thead_ [] [
                    tr_ [] [
-                     th_ [] [ text $ pack "Search Results"]
+                     th_ [] [ text $ pack ("Search Results (" ++ show (round query_ms) ++ "ms)")]
                    ]
                  ]
                , tbody_ [] $ results_ rows
@@ -95,7 +100,7 @@ viewModel Model {..} = view
         attrs = [ onKeyDown $ \case
           EnterButton -> FetchGitHub "  "
           _           -> NoOp
-                , onInput $ FetchGitHub
+                , onInput SetQuery
                 , class_ $ pack "button is-large is-outlined"
                 ] ++ [ disabled_ False | isJust info ]
 
@@ -104,12 +109,14 @@ pattern EnterButton :: KeyCode
 pattern EnterButton = KeyCode 13
 
 results_ :: [[MisoString]] -> [View action]
-results_ m = [ tr_ [] [ td_ [] [ text $ intercalate " " $ m !! i ] ] | i <- [1..10] ]
+results_ (x:xs) = tr_ [] [ td_ [] [ text $ unwords x ] ] : results_ xs
+results_ _ = []
 
 data APIInfo
   = APIInfo
   { database :: MisoString
   , rows :: [[MisoString]]
+  , query_ms :: Float
   } deriving (Show, Eq, Generic)
 
 instance FromJSON APIInfo where
@@ -123,7 +130,7 @@ getGitHubAPIInfo q = do
     Right j -> pure j
   where
     req = Request { reqMethod = GET
-                  , reqURI = pack $ "http://localhost:8001/irc-logs-7f641b3.json?sql=select+*+from+haskell+where+post+like+%22%25" ++ (fromMisoString q) ++ "%25%22"
+                  , reqURI = pack $ "http://localhost:8001/irc-logs-7f641b3.json?sql=select+*+from+haskell+where+post+like+%22%25" ++ (fromMisoString q) ++ "%25%22+limit+15"
                   , reqLogin = Nothing
                   , reqHeaders = []
                   , reqWithCredentials = False
