@@ -17,9 +17,12 @@ import           Data.Maybe
 import           GHC.Generics
 import           JavaScript.Web.XMLHttpRequest
 import           Miso                          hiding (defaultOptions)
-import           Miso.String
-import Prelude hiding (head, concat, unwords)
-import Control.Monad
+import           Miso.String                   hiding (splitAt)
+import           Prelude                       hiding (head, concat, unwords)
+import           Control.Monad
+
+replaceAtIndex n item ls = a ++ (item:b)
+    where (a, (_:b)) = splitAt n ls
 
 -- | Model
 data Model =
@@ -70,7 +73,7 @@ viewModel Model {..} = view
   where
     view = div_ [ style_ $ M.fromList [
                   (pack "text-align", pack "center")
-                , (pack "margin", pack "20px")
+                , (pack "margin", pack "50px")
                 ]
                ] [
         h1_ [class_ $ pack "title" ] [ text $ pack "Haskell IRC Log Search" ]
@@ -84,15 +87,12 @@ viewModel Model {..} = view
           Just APIInfo{..} ->
             div_ [] [
                br_ [] []
-               ,
-               table_ [ class_ $ pack "table is-striped" ] [
-                 thead_ [] [
-                   tr_ [] [
-                     th_ [] [ text $ pack ("Search Results (" ++ show (round query_ms) ++ "ms)")]
-                   ]
-                 ]
+               , th_ [] [ text
+               $ pack ("Search Results (" ++ show (round query_ms) ++ " ms)")]
+               , table_ [ class_ $ pack "table is-striped" ] [
+                 thead_ [] [td_ [] [i] | i <- ["Date", "Time", "User", "Post"]]
                , tbody_ [] $ results_ rows
-               ]
+                 ]
                ]
             ]
 
@@ -101,6 +101,7 @@ viewModel Model {..} = view
           EnterButton -> FetchGitHub "  "
           _           -> NoOp
                 , onInput SetQuery
+                , autofocus_ True
                 , class_ $ pack "button is-large is-outlined"
                 ] ++ [ disabled_ False | isJust info ]
 
@@ -109,8 +110,15 @@ pattern EnterButton :: KeyCode
 pattern EnterButton = KeyCode 13
 
 results_ :: [[MisoString]] -> [View action]
-results_ (x:xs) = tr_ [] [ td_ [] [ text $ unwords x ] ] : results_ xs
+results_ (x:xs) = tr_ [] (tdd $ ircName x) : results_ xs
 results_ _ = []
+
+ircName :: [MisoString] -> [MisoString]
+ircName (a:b:c:d) = a : b : concat ["<", c, ">"] : d
+
+tdd :: [MisoString] -> [View action]
+tdd (x:xs) = td_ [] [text $ x] : tdd xs
+tdd _ = []
 
 data APIInfo
   = APIInfo
@@ -130,7 +138,7 @@ getGitHubAPIInfo q = do
     Right j -> pure j
   where
     req = Request { reqMethod = GET
-                  , reqURI = pack $ "http://localhost:8001/irc-logs-7f641b3.json?sql=select+*+from+haskell+where+post+like+%22%25" ++ (fromMisoString q) ++ "%25%22+limit+15"
+                  , reqURI = pack $ "http://localhost:8001/irc-logs-b0881a8.json?sql=select+*+from+db+where+post+like+%22%25" ++ (fromMisoString q) ++ "%25%22+limit+14"
                   , reqLogin = Nothing
                   , reqHeaders = []
                   , reqWithCredentials = False
