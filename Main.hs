@@ -1,146 +1,96 @@
-{-# LANGUAGE DeriveGeneric       #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators       #-}
-{-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE RecordWildCards     #-}
-{-# LANGUAGE TypeFamilies        #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE PatternSynonyms     #-}
-{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE TypeOperators        #-}
+{-# LANGUAGE DataKinds            #-}
+{-# LANGUAGE RecordWildCards      #-}
+{-# LANGUAGE TypeFamilies         #-}
+{-# LANGUAGE CPP                  #-}
 
 module Main where
 
-import           Data.Aeson
-import           Data.Aeson.Types
-import qualified Data.Map                      as M
-import           Data.Maybe
-import           GHC.Generics
-import           JavaScript.Web.XMLHttpRequest
-import           Miso                          hiding (defaultOptions)
-import           Miso.String                   hiding (splitAt)
-import           Prelude                       hiding (head, concat, unwords)
-import           Control.Monad
+import Network.URI
+import Data.Proxy
+import Servant.API
+#if MIN_VERSION_servant(0,10,0)
+import Servant.Utils.Links
+#endif
 
-replaceAtIndex n item ls = a ++ (item:b)
-    where (a, (_:b)) = splitAt n ls
+import Miso
 
 -- | Model
-data Model =
-  Model { info :: Maybe APIInfo
-        , query :: MisoString
-        } deriving (Eq, Show)
+data Model
+  = Model
+  { uri :: URI
+    -- ^ current URI of application
+  } deriving (Eq, Show)
+
+-- | HasURI typeclass
+instance HasURI Model where
+  lensURI = makeLens getter setter
+    where
+      getter = uri
+      setter = \m u -> m { uri = u }
 
 -- | Action
 data Action
-  = FetchGitHub MisoString
-  | SetGitHub APIInfo
-  | SetQuery MisoString
+  = HandleURI URI
+  | ChangeURI URI
   | NoOp
   deriving (Show, Eq)
 
 -- | Main entry point
 main :: IO ()
-main = startApp
-           App { model = Model { info = Nothing, query = "" }
-               , initialAction = NoOp
-               , mountPoint = Nothing
-               , ..
-               }
-    where
-      update = updateModel
-      events = defaultEvents
-      subs   = []
-      view   = viewModel
+main = do
+  currentURI <- getCurrentURI
+  startApp App { model = Model currentURI, initialAction = NoOp, ..}
+  where
+    update = updateModel
+    events = defaultEvents
+    subs   = [ uriSub HandleURI ]
+    view   = viewModel
+    mountPoint = Nothing
 
 -- | Update your model
 updateModel :: Action -> Model -> Effect Action Model
-
-updateModel (FetchGitHub s) m = m <# do
-  SetGitHub <$> getGitHubAPIInfo (query m)
-
-updateModel (SetQuery q) m =
-  noEff m { query = q }
-
-updateModel (SetGitHub apiInfo) m =
-  noEff m { info = Just apiInfo }
-
-updateModel NoOp m =
-  noEff m
+updateModel (HandleURI u) m = m { uri = u } <# do
+  pure NoOp
+updateModel (ChangeURI u) m = m <# do
+  pushURI u
+  pure NoOp
+updateModel _ m = noEff m
 
 -- | View function, with routing
 viewModel :: Model -> View Action
-viewModel Model {..} = view
+viewModel model@Model {..} = view
   where
-    view = div_ [ style_ $ M.fromList [
-                  (pack "text-align", pack "center")
-                , (pack "margin", pack "50px")
-                ]
-               ] [
-        h1_ [class_ $ pack "title" ] [ text $ pack "Haskell IRC Log Search" ]
+    view = either (const the404) id result
+    result = runRoute (Proxy :: Proxy API) handlers model
+    handlers = about :<|> home
+    home (_ :: Model) = div_ [] [
+        div_ [] [ text "home" ]
+      , button_ [ onClick goAbout ] [ text "go about" ]
+      ]
+    about (_ :: Model) = div_ [] [
+        div_ [] [ text "about" ]
+      , button_ [ onClick goHome ] [ text "go home" ]
+      ]
+    the404 = div_ [] [
+        text "the 404 :("
+      , button_ [ onClick goHome ] [ text "go home" ]
+      ]
 
-      , input_ attrs [
-          text $ pack "Fetch JSON from https://api.github.com via XHR"
-          ]
+-- | Type-level routes
+type API   = About :<|> Home
+type Home  = View Action
+type About = "/#/about" :> View Action
 
-      , case info of
-          Nothing -> div_ [] [ text $ pack "" ]
-          Just APIInfo{..} ->
-            div_ [] [
-               br_ [] []
-               , th_ [] [ text
-               $ pack ("Search Results (" ++ show (round query_ms) ++ " ms)")]
-               , table_ [ class_ $ pack "table is-striped" ] [
-                 thead_ [] [td_ [] [i] | i <- ["Date", "Time", "User", "Post"]]
-               , tbody_ [] $ results_ rows
-                 ]
-               ]
-            ]
+uriparser (Just x) = x
 
-      where
-        attrs = [ onKeyDown $ \case
-          EnterButton -> FetchGitHub "  "
-          _           -> NoOp
-                , onInput SetQuery
-                , autofocus_ True
-                , class_ $ pack "button is-large is-outlined"
-                ] ++ [ disabled_ False | isJust info ]
-
-
-pattern EnterButton :: KeyCode
-pattern EnterButton = KeyCode 13
-
-results_ :: [[MisoString]] -> [View action]
-results_ (x:xs) = tr_ [] (tdd $ ircName x) : results_ xs
-results_ _ = []
-
-ircName :: [MisoString] -> [MisoString]
-ircName (a:b:c:d) = a : b : concat ["<", c, ">"] : d
-
-tdd :: [MisoString] -> [View action]
-tdd (x:xs) = td_ [] [text $ x] : tdd xs
-tdd _ = []
-
-data APIInfo
-  = APIInfo
-  { database :: MisoString
-  , rows :: [[MisoString]]
-  , query_ms :: Float
-  } deriving (Show, Eq, Generic)
-
-instance FromJSON APIInfo where
-  parseJSON = genericParseJSON defaultOptions { fieldLabelModifier = camelTo '_' }
-
-getGitHubAPIInfo :: MisoString -> IO APIInfo
-getGitHubAPIInfo q = do
-  Just resp <- contents <$> xhrByteString req
-  case eitherDecodeStrict resp :: Either String APIInfo of
-    Left s -> error s
-    Right j -> pure j
+-- | Type-safe links used in `onClick` event handlers to route the application
+goAbout, goHome :: Action
+(goHome, goAbout) = (goto api home, goto api about)
   where
-    req = Request { reqMethod = GET
-                  , reqURI = pack $ "http://localhost:8001/irc-logs-b0881a8.json?sql=select+*+from+db+where+post+like+%22%25" ++ (fromMisoString q) ++ "%25%22+limit+14"
-                  , reqLogin = Nothing
-                  , reqHeaders = []
-                  , reqWithCredentials = False
-                  , reqData = NoData
-                  }
+    goto a b = ChangeURI (uriparser $ parseRelativeReference b)
+    home  = Proxy :: Proxy Home
+    about = Proxy :: Proxy About
+    api   = Proxy :: Proxy API
