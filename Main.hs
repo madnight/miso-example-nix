@@ -1,11 +1,10 @@
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE OverloadedStrings    #-}
-{-# LANGUAGE TypeOperators        #-}
-{-# LANGUAGE DataKinds            #-}
-{-# LANGUAGE RecordWildCards      #-}
-{-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE CPP                  #-}
-
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE CPP #-}
 module Main where
 
 import Network.URI
@@ -42,6 +41,8 @@ data Action
 main :: IO ()
 main = do
   currentURI <- getCurrentURI
+  {- let currentURI = uriparser $ parseURI "http://localhost:23322/#/about" -}
+  print currentURI
   startApp App { model = Model currentURI, initialAction = NoOp, ..}
   where
     update = updateModel
@@ -61,16 +62,15 @@ updateModel _ m = noEff m
 
 -- | View function, with routing
 viewModel :: Model -> View Action
-viewModel model@Model {..} = view
+viewModel model@Model {..}
+    | uri == (uriparser $ parseURI "http:#/about") = about
+    | otherwise = home
   where
-    view = either (const the404) id result
-    result = runRoute (Proxy :: Proxy API) handlers model
-    handlers = about :<|> home
-    home (_ :: Model) = div_ [] [
+    home = div_ [] [
         div_ [] [ text "home" ]
       , button_ [ onClick goAbout ] [ text "go about" ]
       ]
-    about (_ :: Model) = div_ [] [
+    about  = div_ [] [
         div_ [] [ text "about" ]
       , button_ [ onClick goHome ] [ text "go home" ]
       ]
@@ -79,18 +79,14 @@ viewModel model@Model {..} = view
       , button_ [ onClick goHome ] [ text "go home" ]
       ]
 
--- | Type-level routes
-type API   = About :<|> Home
-type Home  = View Action
-type About = "/#/about" :> View Action
-
 uriparser (Just x) = x
 
--- | Type-safe links used in `onClick` event handlers to route the application
-goAbout, goHome :: Action
-(goHome, goAbout) = (goto api home, goto api about)
-  where
-    goto a b = ChangeURI (uriparser $ parseRelativeReference b)
-    home  = Proxy :: Proxy Home
-    about = Proxy :: Proxy About
-    api   = Proxy :: Proxy API
+goto :: String -> Action
+goto = ChangeURI . uriparser . parseRelativeReference
+
+goAbout :: Action
+goAbout = goto "#/about"
+
+goHome  :: Action
+goHome = goto "/"
+
